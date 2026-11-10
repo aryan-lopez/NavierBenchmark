@@ -37,7 +37,7 @@ Use `--rar-every 0` to disable RAR, or adjust `--rar-every`, `--rar-candidates`,
 
 ## Stage 2: Taylor–Green vortex
 
-The Taylor–Green case has an exact unsteady solution, space-time collocation, an initial-velocity condition, and periodic boundaries. The Reynolds number and final time are command-line settings because the proposal does not fix them. The single-variant runner supports the velocity–pressure and streamfunction–pressure formulations, soft or hard periodicity, and optional causal weighting over time bins. The defaults use 1,024 fresh space-time collocation points per Adam step and float64 precision. All five variants must use matching settings for a fair ablation comparison.
+The Taylor–Green case has an exact unsteady solution, space-time collocation, an initial-velocity condition, and periodic boundaries. The Reynolds number and final time are command-line settings because the proposal does not fix them. The single-variant runner supports the velocity–pressure and streamfunction–pressure formulations, soft or hard periodicity, and optional causal weighting over time bins. Together, these choices form eight ablation combinations. The defaults use 1,024 fresh space-time collocation points per Adam step and float64 precision. Keep shared training and evaluation settings aligned across all eight variants for a fair comparison.
 
 Run the first requested ablation, velocity–pressure with soft periodicity and no causal weighting:
 

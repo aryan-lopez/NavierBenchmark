@@ -9,5 +9,8 @@ All cases use Re=20, T=1, a 5×64 network, 20,000 Adam steps, up to 1,500 L-BFGS
 | 3 | Velocity–pressure | Hard | Yes | 0.000564023 | 0.000576622 | 0.00519322 | 0.000570357 | 2264.3 |
 | 4 | Streamfunction–pressure | Soft | No | 0.000247796 | 0.000250287 | 0.000759849 | 0.000249044 | 5653.0 |
 | 5 | Streamfunction–pressure | Hard | Yes | 0.000216982 | 0.000218932 | 0.000633138 | 0.000217959 | 5152.8 |
+| 6 | Velocity–pressure | Soft | Yes | 0.000710581 | 0.000729031 | 0.00435049 | 0.000719865 | 2426.0 |
+| 7 | Streamfunction–pressure | Soft | Yes | 0.000262268 | 0.000252102 | 0.000747871 | 0.000257235 | 5688.2 |
+| 8 | Streamfunction–pressure | Hard | No | 0.00026791 | 0.000258384 | 0.000804804 | 0.00026319 | 5263.8 |
 
 Per-run directories contain config, metrics, history, checkpoints, and individual plots.
