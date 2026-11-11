@@ -1,4 +1,4 @@
-"""Build the Stage 2 ablation table and cross-variant comparison plots."""
+"""Build Stage 2 ablation outputs and a velocity-error/training-time Pareto frontier."""
 
 from __future__ import annotations
 
@@ -23,6 +23,18 @@ VARIANTS = (
     ("7", "Streamfunction–pressure, soft, causal", "streamfunction_soft_causal", "streamfunction", "soft", True),
     ("8", "Streamfunction–pressure, hard, no causality", "streamfunction_hard_no_causality", "streamfunction", "hard", False),
 )
+
+
+def _is_dominated(candidate: dict, rows: list[dict]) -> bool:
+    """Whether another variant is no worse in velocity error and time, and better in one."""
+    return any(
+        other["velocity_relative_l2"] <= candidate["velocity_relative_l2"]
+        and other["training_seconds"] <= candidate["training_seconds"]
+        and (other["velocity_relative_l2"] < candidate["velocity_relative_l2"]
+             or other["training_seconds"] < candidate["training_seconds"])
+        for other in rows
+        if other["variant"] != candidate["variant"]
+    )
 
 
 def main() -> None:
@@ -94,16 +106,28 @@ def main() -> None:
         if len({row[key] for row in rows}) != 1:
             raise ValueError(f"Ablation runs do not share {key}")
 
+    for row in rows:
+        row["pareto_efficient"] = not _is_dominated(row, rows)
+    frontier_rows = sorted((row for row in rows if row["pareto_efficient"]),
+                           key=lambda row: row["training_seconds"])
+
     with (root / "ablation_table.csv").open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
 
+    pareto_fields = ("variant", "case", "velocity_relative_l2", "training_seconds", "p_relative_l2")
+    with (root / "pareto_frontier.csv").open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=pareto_fields)
+        writer.writeheader()
+        writer.writerows({key: row[key] for key in pareto_fields} for row in frontier_rows)
+
     table = [
         "# Stage 2 Taylor–Green ablation results", "",
-        f"All cases use Re={rows[0]['reynolds']:g}, T={rows[0]['final_time']:g}, a {rows[0]['layers']}×{rows[0]['width']} network, {rows[0]['adam_steps']:,} Adam steps, up to {rows[0]['lbfgs_max_iter']:,} L-BFGS iterations, {rows[0]['collocation_points']:,} space-time collocation points per Adam step, {rows[0]['dtype']} precision, and a {rows[0]['eval_resolution']}×{rows[0]['eval_resolution']} grid at {rows[0]['eval_times']} times. Relative pressure error aligns pressure means independently at each evaluation frame. RAR is disabled.", "",
-        "| Variant | Formulation | Periodicity | Causality | Rel. L2 u | Rel. L2 v | Rel. L2 p | Rel. L2 velocity | Training (s) |",
-        "|---:|---|---|---|---:|---:|---:|---:|---:|",
+        f"All cases use Re={rows[0]['reynolds']:g}, T={rows[0]['final_time']:g}, a {rows[0]['layers']}×{rows[0]['width']} network, {rows[0]['adam_steps']:,} Adam steps, up to {rows[0]['lbfgs_max_iter']:,} L-BFGS iterations, {rows[0]['collocation_points']:,} space-time collocation points per Adam step, {rows[0]['dtype']} precision, and a {rows[0]['eval_resolution']}×{rows[0]['eval_resolution']} grid at {rows[0]['eval_times']} times. Relative pressure error aligns pressure means independently at each evaluation frame. RAR is disabled.",
+        "The Pareto flag minimizes combined relative L2 velocity error (εᵤ) and training time; pressure error is reported but is not part of this two-objective frontier.", "",
+        "| Variant | Formulation | Periodicity | Causality | Rel. L2 u | Rel. L2 v | Rel. L2 p | Rel. L2 velocity (εᵤ) | Training (s) | Pareto efficient? |",
+        "|---:|---|---|---|---:|---:|---:|---:|---:|:---:|",
     ]
     for row in rows:
         formulation = "Velocity–pressure" if row["formulation"] == "velocity_pressure" else "Streamfunction–pressure"
@@ -113,9 +137,10 @@ def main() -> None:
             f"| {row['variant']} | {formulation} | {periodicity} | {causal} | "
             f"{row['u_relative_l2']:.6g} | {row['v_relative_l2']:.6g} | "
             f"{row['p_relative_l2']:.6g} | {row['velocity_relative_l2']:.6g} | "
-            f"{row['training_seconds']:.1f} |"
+            f"{row['training_seconds']:.1f} | {'Yes' if row['pareto_efficient'] else 'No'} |"
         )
-    table += ["", "Per-run directories contain config, metrics, history, checkpoints, and individual plots."]
+    table += ["", "Pareto-efficient variants are also listed in `pareto_frontier.csv` and plotted in `pareto_frontier.png`.",
+              "Per-run directories contain config, metrics, history, checkpoints, and individual plots."]
     (root / "ablation_table.md").write_text("\n".join(table) + "\n", encoding="utf-8")
 
     colors = plt.get_cmap("tab10").colors[:len(rows)]
@@ -165,6 +190,32 @@ def main() -> None:
     axis.set_title("Ablation training cost comparison")
     axis.grid(True, axis="y", alpha=0.25)
     fig.savefig(root / "ablation_training_time.png", dpi=180)
+    plt.close(fig)
+
+    fig, axis = plt.subplots(figsize=(9, 6.5), constrained_layout=True)
+    dominated_rows = [row for row in rows if not row["pareto_efficient"]]
+    axis.scatter([row["training_seconds"] / 60 for row in dominated_rows],
+                 [row["velocity_relative_l2"] for row in dominated_rows],
+                 color="#aeb4bd", edgecolor="#333333", s=75, label="Dominated")
+    axis.scatter([row["training_seconds"] / 60 for row in frontier_rows],
+                 [row["velocity_relative_l2"] for row in frontier_rows],
+                 color="#d1495b", edgecolor="#333333", s=100, marker="D",
+                 label="Pareto efficient")
+    if len(frontier_rows) > 1:
+        axis.plot([row["training_seconds"] / 60 for row in frontier_rows],
+                  [row["velocity_relative_l2"] for row in frontier_rows],
+                  color="#d1495b", linewidth=1.5, alpha=0.8)
+    for row in rows:
+        axis.annotate(row["variant"],
+                      (row["training_seconds"] / 60, row["velocity_relative_l2"]),
+                      xytext=(5, 5), textcoords="offset points", fontsize=9)
+    axis.set_yscale("log")
+    axis.set_xlabel("Training time (minutes; lower is better)")
+    axis.set_ylabel("Combined relative L2 velocity error εᵤ (lower is better)")
+    axis.set_title("Stage 2 Pareto frontier: accuracy versus training time")
+    axis.grid(True, which="both", alpha=0.25)
+    axis.legend()
+    fig.savefig(root / "pareto_frontier.png", dpi=180)
     plt.close(fig)
     print(f"Wrote ablation table and comparison plots to {root}")
 

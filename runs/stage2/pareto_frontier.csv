@@ -1,0 +1,4 @@
+variant,case,velocity_relative_l2,training_seconds,p_relative_l2
+2,"Velocity–pressure, hard, no causality",0.0006020052309089444,2138.1409923429965,0.00527526880351591
+3,"Velocity–pressure, hard, causal",0.0005703569047476019,2264.3401235000056,0.005193220062732481
+5,"Streamfunction–pressure, hard, causal",0.0002179592790056448,5152.809976877999,0.000633137519595798
