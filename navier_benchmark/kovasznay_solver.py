@@ -14,7 +14,7 @@ import torch
 from torch import Tensor, nn
 
 from .kovasznay import KovasznayFlow
-from .model import VelocityPressureMLP
+from .kovasznay_model import VelocityPressureMLP
 
 
 @dataclass(frozen=True)
@@ -22,7 +22,7 @@ class TrainingConfig:
     reynolds: float
     steps: int = 20_000
     collocation_points: int = 1024
-    rar_every: int = 5_000
+    rar_every: int = 0
     rar_candidates: int = 8_192
     rar_points: int = 256
     rar_chunk_size: int = 1_024
@@ -31,7 +31,7 @@ class TrainingConfig:
     periodic_y_features: bool = True
     learning_rate: float = 1e-3
     lr_decay: float = 0.9999
-    lbfgs_steps: int = 500
+    lbfgs_steps: int = 1_500
     test_resolution: int = 201
     seed: int = 1234
     device: str = "cpu"
