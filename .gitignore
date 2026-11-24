@@ -31,3 +31,4 @@ dist/
 # Logs and temporary files
 *.log
 *.tmp
+stage3changes

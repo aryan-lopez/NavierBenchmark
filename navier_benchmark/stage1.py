@@ -12,7 +12,7 @@ from .kovasznay_solver import TrainingConfig, train
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train and evaluate the Stage 1 Kovasznay PINN.")
     parser.add_argument("--reynolds", nargs="+", type=float, default=(20.0, 40.0), help="Reynolds number(s), default: 20 40")
-    parser.add_argument("--output", type=Path, default=Path("runs/stage1"), help="Output directory")
+    parser.add_argument("--output", type=Path, default=Path("runs/stage1/default"), help="Output directory")
     parser.add_argument("--steps", type=int, default=20_000, help="Adam iterations")
     parser.add_argument("--collocation", type=int, default=1024, help="Fresh uniform interior points per Adam step")
     parser.add_argument("--rar-every", type=int, default=0, help="Add high-residual points every N Adam steps; 0 disables RAR (default)")

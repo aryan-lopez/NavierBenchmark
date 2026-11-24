@@ -26,7 +26,7 @@ python -m pip install -r requirements.txt
 python -m navier_benchmark
 ```
 
-The default command runs both Reynolds numbers with a 5-layer, 64-wide network, 20,000 Adam steps, and up to 1,500 L-BFGS iterations. Periodic `y` features are enabled and RAR is disabled by default. Results go to `runs/stage1/Re_20` and `runs/stage1/Re_40`.
+The default command runs both Reynolds numbers with a 5-layer, 64-wide network, 20,000 Adam steps, and up to 1,500 L-BFGS iterations. Periodic `y` features are enabled and RAR is disabled by default. Results go to `runs/stage1/default/Re_20` and `runs/stage1/default/Re_40`; all Stage 1 variants are grouped under `runs/stage1/`.
 
 For a shorter smoke-sized run or a single case:
 
