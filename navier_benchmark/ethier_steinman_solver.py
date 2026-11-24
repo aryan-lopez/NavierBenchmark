@@ -43,6 +43,7 @@ class EthierSteinmanTrainingConfig:
     causality: bool = False
     causal_time_bins: int = 10
     causal_epsilon_schedule: tuple[float, ...] = (0.01, 0.1, 1.0, 10.0, 100.0)
+    causal_weight_threshold: float = 0.99
     evaluation_resolution: int = 21
     evaluation_times: int = 11
     plot_time: float | None = None
@@ -67,6 +68,8 @@ class EthierSteinmanTrainingConfig:
             raise ValueError("causal_time_bins and causal_epsilon_schedule must be nonempty and positive")
         if any(epsilon <= 0 for epsilon in self.causal_epsilon_schedule):
             raise ValueError("causal epsilon values must be positive")
+        if not 0.0 < self.causal_weight_threshold < 1.0:
+            raise ValueError("causal_weight_threshold must be in (0, 1)")
         if self.causality and self.collocation_points < self.causal_time_bins:
             raise ValueError("collocation_points must be at least causal_time_bins")
         if self.plot_time is not None and not 0.0 <= self.plot_time <= self.final_time:
@@ -138,13 +141,6 @@ def _sample_stratified_collocation(flow: EthierSteinmanFlow, count: int, bins: i
         t = low + (high - low) * torch.rand(n, 1, device=device, dtype=dtype, generator=generator)
         batches.append(torch.cat((spatial, t), dim=1))
     return torch.cat(batches, dim=0)
-
-
-def _epsilon_for_step(config: EthierSteinmanTrainingConfig, step: int) -> float:
-    """Use the paper's staged epsilon annealing over equal Adam-step blocks."""
-    stage = min((step - 1) * len(config.causal_epsilon_schedule) // config.steps,
-                len(config.causal_epsilon_schedule) - 1)
-    return config.causal_epsilon_schedule[stage]
 
 
 def _residual_scores(model: EthierSteinmanPINN, flow: EthierSteinmanFlow,
@@ -293,47 +289,82 @@ def train(config: EthierSteinmanTrainingConfig, output_dir: str | Path) -> dict[
             interior = torch.cat((interior, adaptive), dim=0)
         return interior, initial_points, initial_velocity, boundary_points, boundary_velocity
 
-    for step in range(1, config.steps + 1):
-        interior, initial_points, initial_velocity, boundary_points, boundary_velocity = sample_fixed_batch()
-        optimizer.zero_grad(set_to_none=True)
-        epsilon = _epsilon_for_step(config, step) if config.causality else 0.0
-        total, momentum, continuity, initial, boundary, min_weight = _losses(
-            model, flow, interior, initial_points, initial_velocity, boundary_points, boundary_velocity,
-            causal_time_bins=config.causal_time_bins if config.causality else 0,
-            causal_epsilon=epsilon)
-        total.backward()
-        optimizer.step()
-        scheduler.step()
+    adam_steps_completed = 0
+    causal_stage_summaries: list[dict[str, float | int | bool]] = []
+    epsilon_stages = config.causal_epsilon_schedule if config.causality else (0.0,)
+    for stage_index, epsilon in enumerate(epsilon_stages):
+        stage_steps = 0
+        remaining_budget = config.steps - adam_steps_completed
+        remaining_stages = len(epsilon_stages) - stage_index
+        stage_step_cap = (remaining_budget + remaining_stages - 1) // remaining_stages
+        stage_min_weight = 1.0
+        threshold_reached = False
+        for stage_step in range(1, stage_step_cap + 1):
+            step = adam_steps_completed + 1
+            interior, initial_points, initial_velocity, boundary_points, boundary_velocity = sample_fixed_batch()
+            optimizer.zero_grad(set_to_none=True)
+            total, momentum, continuity, initial, boundary, min_weight = _losses(
+                model, flow, interior, initial_points, initial_velocity, boundary_points, boundary_velocity,
+                causal_time_bins=config.causal_time_bins if config.causality else 0,
+                causal_epsilon=epsilon)
+            total.backward()
+            optimizer.step()
+            scheduler.step()
+            adam_steps_completed += 1
+            stage_steps += 1
+            stage_min_weight = float(min_weight.detach())
 
-        if config.rar_every and config.rar_points and step % config.rar_every == 0:
-            candidates = flow.sample_collocation(config.rar_candidates, device=device,
-                                                 dtype=dtype, generator=generator)
-            scores = torch.cat([_residual_scores(model, flow, block, config.rar_chunk_size)
-                                for block in candidates.split(config.rar_chunk_size)])
-            count = min(config.rar_points, len(candidates))
-            values, indices = torch.topk(scores, count)
-            new_points = candidates[indices].detach()
-            adaptive = new_points if adaptive is None else torch.cat((adaptive, new_points), dim=0)
-            history.append({"step": step, "phase": "rar", "added_points": count,
-                            "total_adaptive_points": int(len(adaptive)),
-                            "max_selected_residual": float(values[0].cpu())})
+            if config.rar_every and config.rar_points and step % config.rar_every == 0:
+                candidates = flow.sample_collocation(config.rar_candidates, device=device,
+                                                     dtype=dtype, generator=generator)
+                scores = torch.cat([_residual_scores(model, flow, block, config.rar_chunk_size)
+                                    for block in candidates.split(config.rar_chunk_size)])
+                count = min(config.rar_points, len(candidates))
+                values, indices = torch.topk(scores, count)
+                new_points = candidates[indices].detach()
+                adaptive = new_points if adaptive is None else torch.cat((adaptive, new_points), dim=0)
+                history.append({"step": step, "phase": "rar", "added_points": count,
+                                "total_adaptive_points": int(len(adaptive)),
+                                "max_selected_residual": float(values[0].cpu())})
 
-        if step == 1 or step % config.log_every == 0 or step == config.steps:
-            row: dict[str, float | int | str] = {
-                "step": step, "phase": "adam", "loss": float(total.detach()),
-                "momentum_loss": float(momentum.detach()),
-                "continuity_loss": float(continuity.detach()),
-                "initial_loss": float(initial.detach()),
-                "boundary_loss": float(boundary.detach()),
-                "learning_rate": float(scheduler.get_last_lr()[0]),
+            if step == 1 or step % config.log_every == 0 or stage_step == stage_step_cap:
+                row: dict[str, float | int | str] = {
+                    "step": step, "phase": "adam", "loss": float(total.detach()),
+                    "momentum_loss": float(momentum.detach()),
+                    "continuity_loss": float(continuity.detach()),
+                    "initial_loss": float(initial.detach()),
+                    "boundary_loss": float(boundary.detach()),
+                    "learning_rate": float(scheduler.get_last_lr()[0]),
+                }
+                if config.causality:
+                    row["causal_stage"] = stage_index
+                    row["causal_epsilon"] = epsilon
+                    row["min_causal_weight"] = stage_min_weight
+                history.append(row)
+                print(f"Stage 3 step={step:>6} loss={row['loss']:.3e} "
+                      f"momentum={row['momentum_loss']:.3e} continuity={row['continuity_loss']:.3e} "
+                      f"initial={row['initial_loss']:.3e} boundary={row['boundary_loss']:.3e}", flush=True)
+
+            if config.causality and stage_min_weight >= config.causal_weight_threshold:
+                threshold_reached = True
+                break
+
+        if config.causality:
+            stage_summary: dict[str, float | int | bool] = {
+                "stage": stage_index, "epsilon": epsilon, "steps": stage_steps,
+                "step_cap": stage_step_cap,
+                "min_causal_weight": stage_min_weight,
+                "threshold": config.causal_weight_threshold,
+                "threshold_reached": threshold_reached,
             }
-            if config.causality:
-                row["causal_epsilon"] = epsilon
-                row["min_causal_weight"] = float(min_weight.detach())
-            history.append(row)
-            print(f"Stage 3 step={step:>6} loss={row['loss']:.3e} "
-                  f"momentum={row['momentum_loss']:.3e} continuity={row['continuity_loss']:.3e} "
-                  f"initial={row['initial_loss']:.3e} boundary={row['boundary_loss']:.3e}", flush=True)
+            causal_stage_summaries.append(stage_summary)
+            history.append({"step": adam_steps_completed, "phase": "causal_stage", **stage_summary})
+            print(f"Stage 3 causal stage {stage_index + 1}/{len(epsilon_stages)} "
+                  f"epsilon={epsilon:g} steps={stage_steps}/{stage_step_cap} "
+                  f"min_weight={stage_min_weight:.4f} "
+                  f"threshold_reached={threshold_reached}", flush=True)
+        if adam_steps_completed >= config.steps:
+            break
 
     if config.lbfgs_steps:
         interior, initial_points, initial_velocity, boundary_points, boundary_velocity = sample_fixed_batch()
@@ -361,7 +392,7 @@ def train(config: EthierSteinmanTrainingConfig, output_dir: str | Path) -> dict[
             boundary_points, boundary_velocity,
             causal_time_bins=config.causal_time_bins if config.causality else 0,
             causal_epsilon=config.causal_epsilon_schedule[-1] if config.causality else 0.0)
-        history.append({"step": config.steps, "phase": "lbfgs", "closure_calls": calls,
+        history.append({"step": adam_steps_completed, "phase": "lbfgs", "closure_calls": calls,
                         "loss": float(final_losses[0].detach()),
                         "momentum_loss": float(final_losses[1].detach()),
                         "continuity_loss": float(final_losses[2].detach()),
@@ -382,6 +413,8 @@ def train(config: EthierSteinmanTrainingConfig, output_dir: str | Path) -> dict[
         "boundary_condition": "exact_velocity_on_initial_time_and_six_spatial_faces",
         "viscosity": config.viscosity,
         "training_seconds": elapsed,
+        "adam_steps_completed": adam_steps_completed,
+        "causal_stages": causal_stage_summaries,
         "config": asdict(config), "errors": errors, "history": history,
     }
     torch.save({"state_dict": model.state_dict(), "config": asdict(config)}, output / "model.pt")

@@ -53,16 +53,16 @@ It uses a 5-layer, 64-wide network, 20,000 Adam steps with exponential learning-
 
 `navier_benchmark.ethier_steinman.EthierSteinmanFlow` provides the proposal's unsteady 3D exact solution on `[-1, 1]^3 x [0, 1]`, with `a=d=1`. Pass the kinematic viscosity when constructing the case; this is fixed for a forward run and can be made trainable by an inverse-training model. Coordinates are columns `(x, y, z, t)`, and `exact()` returns `(u, v, w, p)`. The case also samples space-time collocation points, initial velocity points at `t=0`, and velocity Dirichlet data on all six spatial faces for `t` in `[0, 1]`. Pressure is available for reference/evaluation and is not imposed on the boundary. `unsteady_navier_stokes_3d_residual()` evaluates the three momentum residuals and incompressibility residual and accepts a scalar tensor viscosity for inverse-training gradients.
 
-The forward trainer reuses the Stage 1 Adam learning-rate decay and L-BFGS sequence. Defaults are 20,000 Adam steps, 1,500 L-BFGS steps, periodic sine/cosine features of `y`, and no RAR. Initial and six-face velocity boundary data enter as soft losses. Causal time-bin weighting is optional and off by default. Run it with:
+The forward trainer reuses the Stage 1 Adam learning-rate decay and L-BFGS sequence. Defaults are up to 20,000 total Adam steps, 1,500 L-BFGS steps, periodic sine/cosine features of `y`, and no RAR. Initial and six-face velocity boundary data enter as soft losses. Causal time-bin weighting is optional and off by default. Run it with:
 
 ```bash
 python -m navier_benchmark.stage3 --viscosity 0.01
 ```
 
-The default output is `runs/stage3/forward`. It saves model weights, training history, configuration, relative L2 errors for each velocity component and pressure on a dense space-time grid, pointwise absolute-error maps on the central `z=0` slice, and relative error versus time (`error_vs_time.csv` and `.png`). Adjust `--eval-resolution` and `--eval-times` to control evaluation-grid size; set `--plot-time` to choose the map time (defaults to final time). Override defaults with `--no-periodic-y-features` or set `--rar-every` to a positive number to enable RAR. Enable causal weighting with `--causality`; adjust its time bins and annealed epsilon values with `--causal-time-bins` and `--causal-epsilon-schedule`.
+The default output is `runs/stage3/forward`. It saves model weights, training history, configuration, relative L2 errors for each velocity component and pressure on a dense space-time grid, pointwise absolute-error maps on the central `z=0` slice, and relative error versus time (`error_vs_time.csv` and `.png`). Adjust `--eval-resolution` and `--eval-times` to control evaluation-grid size; set `--plot-time` to choose the map time (defaults to final time). Override defaults with `--no-periodic-y-features` or set `--rar-every` to a positive number to enable RAR. Enable causal weighting with `--causality`; adjust its time bins, epsilon schedule, and minimum-weight threshold with `--causal-time-bins`, `--causal-epsilon-schedule`, and `--causal-weight-threshold`. `--steps` is the total Adam-step budget across all epsilon stages; that budget is split across remaining stages and redistributed when a stage reaches the threshold early.
 
-To compare causal weighting against the no-periodic-`y` baseline, give the new run a separate output directory:
+To compare threshold-controlled causal weighting against the no-periodic-`y` baseline, give the new run a separate output directory:
 
 ```bash
-python -m navier_benchmark.stage3 --no-periodic-y-features --causality --output runs/stage3/no_periodic_y_causal
+python -m navier_benchmark.stage3 --no-periodic-y-features --causality --output runs/stage3/forward_no_periodic_y_causal_threshold
 ```

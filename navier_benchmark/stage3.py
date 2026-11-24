@@ -13,7 +13,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Train the Stage 3 Ethier--Steinman forward PINN.")
     parser.add_argument("--viscosity", type=float, default=0.01)
     parser.add_argument("--final-time", type=float, default=1.0)
-    parser.add_argument("--steps", type=int, default=20_000)
+    parser.add_argument("--steps", type=int, default=20_000,
+                        help="Total maximum Adam steps across all causal epsilon stages")
     parser.add_argument("--collocation", type=int, default=1_024)
     parser.add_argument("--initial-points", type=int, default=512)
     parser.add_argument("--boundary-points-per-face", type=int, default=512)
@@ -31,6 +32,8 @@ def main() -> None:
     parser.add_argument("--causality", action="store_true",
                         help="Enable causal weighting of PDE residuals across time bins")
     parser.add_argument("--causal-time-bins", type=int, default=10)
+    parser.add_argument("--causal-weight-threshold", type=float, default=0.99,
+                        help="Advance epsilon stages after min causal weight reaches this value")
     parser.add_argument("--causal-epsilon-schedule", nargs="+", type=float,
                         default=(0.01, 0.1, 1.0, 10.0, 100.0),
                         help="Causality strengths annealed across training stages")
@@ -54,6 +57,7 @@ def main() -> None:
         lbfgs_steps=args.lbfgs_steps, periodic_y_features=args.periodic_y_features,
         causality=args.causality, causal_time_bins=args.causal_time_bins,
         causal_epsilon_schedule=tuple(args.causal_epsilon_schedule),
+        causal_weight_threshold=args.causal_weight_threshold,
         evaluation_resolution=args.eval_resolution,
         evaluation_times=args.eval_times, seed=args.seed, device=args.device,
         plot_time=args.plot_time, dtype=args.dtype,
