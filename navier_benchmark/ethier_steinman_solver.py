@@ -40,6 +40,9 @@ class EthierSteinmanTrainingConfig:
     lr_decay: float = 0.9999
     lbfgs_steps: int = 1_500
     periodic_y_features: bool = True
+    causality: bool = False
+    causal_time_bins: int = 10
+    causal_epsilon_schedule: tuple[float, ...] = (0.01, 0.1, 1.0, 10.0, 100.0)
     evaluation_resolution: int = 21
     evaluation_times: int = 11
     plot_time: float | None = None
@@ -60,6 +63,12 @@ class EthierSteinmanTrainingConfig:
             raise ValueError("RAR candidate and chunk sizes must be positive")
         if self.evaluation_resolution < 2 or self.evaluation_times < 1:
             raise ValueError("evaluation grid sizes are invalid")
+        if self.causal_time_bins < 1 or not self.causal_epsilon_schedule:
+            raise ValueError("causal_time_bins and causal_epsilon_schedule must be nonempty and positive")
+        if any(epsilon <= 0 for epsilon in self.causal_epsilon_schedule):
+            raise ValueError("causal epsilon values must be positive")
+        if self.causality and self.collocation_points < self.causal_time_bins:
+            raise ValueError("collocation_points must be at least causal_time_bins")
         if self.plot_time is not None and not 0.0 <= self.plot_time <= self.final_time:
             raise ValueError("plot_time must be within [0, final_time]")
         if self.hidden_layers < 1 or self.width < 1 or self.log_every < 1:
@@ -81,15 +90,61 @@ def _resolve_device(name: str) -> torch.device:
 
 def _losses(model: EthierSteinmanPINN, flow: EthierSteinmanFlow,
             interior: Tensor, initial_points: Tensor, initial_velocity: Tensor,
-            boundary_points: Tensor, boundary_velocity: Tensor
-            ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+            boundary_points: Tensor, boundary_velocity: Tensor,
+            *, causal_time_bins: int = 0, causal_epsilon: float = 0.0
+            ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
     r_u, r_v, r_w, r_c = unsteady_navier_stokes_3d_residual(
         model, interior, flow.viscosity)
     momentum = (r_u.square() + r_v.square() + r_w.square()).mean()
     continuity = r_c.square().mean()
     initial = (model(initial_points)[:, :3] - initial_velocity).square().mean()
     boundary = (model(boundary_points)[:, :3] - boundary_velocity).square().mean()
-    return momentum + continuity + initial + boundary, momentum, continuity, initial, boundary
+    if causal_time_bins > 0:
+        bin_ids = torch.floor(interior[:, 3] / flow.final_time * causal_time_bins).long()
+        bin_ids = bin_ids.clamp_(min=0, max=causal_time_bins - 1)
+        residual_losses = []
+        for time_bin in range(causal_time_bins):
+            mask = bin_ids == time_bin
+            if not torch.any(mask):
+                raise ValueError("Each causal time bin must contain collocation points")
+            bin_momentum = (r_u[mask].square() + r_v[mask].square() + r_w[mask].square()).mean()
+            bin_continuity = r_c[mask].square().mean()
+            residual_losses.append(bin_momentum + bin_continuity)
+        per_time_losses = torch.stack(residual_losses)
+        cumulative = torch.cat((per_time_losses.new_zeros(1), torch.cumsum(per_time_losses.detach(), dim=0)[:-1]))
+        causal_weights = torch.exp(-causal_epsilon * (initial.detach() + cumulative))
+        causal_pde = (causal_weights * per_time_losses).mean()
+        total = causal_pde + initial + boundary
+    else:
+        causal_weights = initial.new_ones(1)
+        total = momentum + continuity + initial + boundary
+    min_causal_weight = causal_weights.min()
+    return total, momentum, continuity, initial, boundary, min_causal_weight
+
+
+def _sample_stratified_collocation(flow: EthierSteinmanFlow, count: int, bins: int,
+                                   *, device: torch.device, dtype: torch.dtype,
+                                   generator: torch.Generator) -> Tensor:
+    """Draw a near-equal number of residual points from each ordered time bin."""
+    base, remainder = divmod(count, bins)
+    batches = []
+    for index in range(bins):
+        n = base + int(index < remainder)
+        if n == 0:
+            continue
+        spatial = 2.0 * torch.rand(n, 3, device=device, dtype=dtype, generator=generator) - 1.0
+        low = flow.final_time * index / bins
+        high = flow.final_time * (index + 1) / bins
+        t = low + (high - low) * torch.rand(n, 1, device=device, dtype=dtype, generator=generator)
+        batches.append(torch.cat((spatial, t), dim=1))
+    return torch.cat(batches, dim=0)
+
+
+def _epsilon_for_step(config: EthierSteinmanTrainingConfig, step: int) -> float:
+    """Use the paper's staged epsilon annealing over equal Adam-step blocks."""
+    stage = min((step - 1) * len(config.causal_epsilon_schedule) // config.steps,
+                len(config.causal_epsilon_schedule) - 1)
+    return config.causal_epsilon_schedule[stage]
 
 
 def _residual_scores(model: EthierSteinmanPINN, flow: EthierSteinmanFlow,
@@ -227,8 +282,13 @@ def train(config: EthierSteinmanTrainingConfig, output_dir: str | Path) -> dict[
             config.initial_points, device=device, dtype=dtype, generator=generator)
         boundary_points, boundary_velocity = flow.sample_boundary(
             config.boundary_points_per_face, device=device, dtype=dtype, generator=generator)
-        interior = flow.sample_collocation(config.collocation_points, device=device,
-                                           dtype=dtype, generator=generator)
+        if config.causality:
+            interior = _sample_stratified_collocation(
+                flow, config.collocation_points, config.causal_time_bins,
+                device=device, dtype=dtype, generator=generator)
+        else:
+            interior = flow.sample_collocation(config.collocation_points, device=device,
+                                               dtype=dtype, generator=generator)
         if adaptive is not None:
             interior = torch.cat((interior, adaptive), dim=0)
         return interior, initial_points, initial_velocity, boundary_points, boundary_velocity
@@ -236,8 +296,11 @@ def train(config: EthierSteinmanTrainingConfig, output_dir: str | Path) -> dict[
     for step in range(1, config.steps + 1):
         interior, initial_points, initial_velocity, boundary_points, boundary_velocity = sample_fixed_batch()
         optimizer.zero_grad(set_to_none=True)
-        total, momentum, continuity, initial, boundary = _losses(
-            model, flow, interior, initial_points, initial_velocity, boundary_points, boundary_velocity)
+        epsilon = _epsilon_for_step(config, step) if config.causality else 0.0
+        total, momentum, continuity, initial, boundary, min_weight = _losses(
+            model, flow, interior, initial_points, initial_velocity, boundary_points, boundary_velocity,
+            causal_time_bins=config.causal_time_bins if config.causality else 0,
+            causal_epsilon=epsilon)
         total.backward()
         optimizer.step()
         scheduler.step()
@@ -264,6 +327,9 @@ def train(config: EthierSteinmanTrainingConfig, output_dir: str | Path) -> dict[
                 "boundary_loss": float(boundary.detach()),
                 "learning_rate": float(scheduler.get_last_lr()[0]),
             }
+            if config.causality:
+                row["causal_epsilon"] = epsilon
+                row["min_causal_weight"] = float(min_weight.detach())
             history.append(row)
             print(f"Stage 3 step={step:>6} loss={row['loss']:.3e} "
                   f"momentum={row['momentum_loss']:.3e} continuity={row['continuity_loss']:.3e} "
@@ -280,21 +346,30 @@ def train(config: EthierSteinmanTrainingConfig, output_dir: str | Path) -> dict[
         def closure() -> Tensor:
             nonlocal calls
             lbfgs.zero_grad(set_to_none=True)
-            loss, *_ = _losses(model, flow, interior, initial_points, initial_velocity,
-                               boundary_points, boundary_velocity)
+            loss, *_ = _losses(
+                model, flow, interior, initial_points, initial_velocity,
+                boundary_points, boundary_velocity,
+                causal_time_bins=config.causal_time_bins if config.causality else 0,
+                causal_epsilon=config.causal_epsilon_schedule[-1] if config.causality else 0.0)
             loss.backward()
             calls += 1
             return loss
 
         lbfgs.step(closure)
-        final_losses = _losses(model, flow, interior, initial_points, initial_velocity,
-                               boundary_points, boundary_velocity)
+        final_losses = _losses(
+            model, flow, interior, initial_points, initial_velocity,
+            boundary_points, boundary_velocity,
+            causal_time_bins=config.causal_time_bins if config.causality else 0,
+            causal_epsilon=config.causal_epsilon_schedule[-1] if config.causality else 0.0)
         history.append({"step": config.steps, "phase": "lbfgs", "closure_calls": calls,
                         "loss": float(final_losses[0].detach()),
                         "momentum_loss": float(final_losses[1].detach()),
                         "continuity_loss": float(final_losses[2].detach()),
                         "initial_loss": float(final_losses[3].detach()),
-                        "boundary_loss": float(final_losses[4].detach())})
+                        "boundary_loss": float(final_losses[4].detach()),
+                        **({"min_causal_weight": float(final_losses[5].detach()),
+                            "causal_epsilon": config.causal_epsilon_schedule[-1]}
+                           if config.causality else {})})
 
     elapsed = time.perf_counter() - start
     errors, time_errors, error_maps = evaluate(

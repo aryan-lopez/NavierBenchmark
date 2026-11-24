@@ -28,6 +28,12 @@ def main() -> None:
     parser.add_argument("--lbfgs-steps", type=int, default=1_500)
     parser.add_argument("--periodic-y-features", action=argparse.BooleanOptionalAction,
                         default=True, help="Append sin/cos features of y (default: enabled)")
+    parser.add_argument("--causality", action="store_true",
+                        help="Enable causal weighting of PDE residuals across time bins")
+    parser.add_argument("--causal-time-bins", type=int, default=10)
+    parser.add_argument("--causal-epsilon-schedule", nargs="+", type=float,
+                        default=(0.01, 0.1, 1.0, 10.0, 100.0),
+                        help="Causality strengths annealed across training stages")
     parser.add_argument("--eval-resolution", type=int, default=21)
     parser.add_argument("--eval-times", type=int, default=11)
     parser.add_argument("--plot-time", type=float, default=None,
@@ -46,6 +52,8 @@ def main() -> None:
         rar_points=args.rar_points, hidden_layers=args.layers, width=args.width,
         learning_rate=args.learning_rate, lr_decay=args.lr_decay,
         lbfgs_steps=args.lbfgs_steps, periodic_y_features=args.periodic_y_features,
+        causality=args.causality, causal_time_bins=args.causal_time_bins,
+        causal_epsilon_schedule=tuple(args.causal_epsilon_schedule),
         evaluation_resolution=args.eval_resolution,
         evaluation_times=args.eval_times, seed=args.seed, device=args.device,
         plot_time=args.plot_time, dtype=args.dtype,
