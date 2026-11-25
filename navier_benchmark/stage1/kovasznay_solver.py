@@ -43,6 +43,8 @@ class TrainingConfig:
             raise ValueError("Training steps and sample counts must be positive")
         if self.test_resolution < 2 or self.lbfgs_steps < 0:
             raise ValueError("test_resolution must be >= 2 and lbfgs_steps must be >= 0")
+        if self.log_every < 1:
+            raise ValueError("log_every must be positive")
         if self.rar_every < 0 or self.rar_points < 0 or self.rar_candidates < 1 or self.rar_chunk_size < 1:
             raise ValueError("RAR settings must be non-negative, with positive candidate and chunk sizes")
         if self.dtype not in ("float32", "float64"):

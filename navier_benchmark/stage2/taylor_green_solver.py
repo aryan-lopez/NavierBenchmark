@@ -18,7 +18,7 @@ from torch import Tensor
 
 from .taylor_green import TaylorGreenVortex
 from .taylor_green_model import TaylorGreenPINN, Formulation, Periodicity, periodic_boundary_loss
-from .unsteady import unsteady_navier_stokes_residual
+from .taylor_green_residual import unsteady_navier_stokes_residual
 
 
 @dataclass(frozen=True)
@@ -57,9 +57,10 @@ class TaylorGreenTrainingConfig:
             raise ValueError("steps must be positive and lbfgs_steps nonnegative")
         if min(self.collocation_points, self.initial_points, self.periodic_pairs) < 1:
             raise ValueError("all training sample counts must be positive")
-        if min(self.hidden_layers, self.width, self.evaluation_spatial_resolution,
-               self.evaluation_time_points, self.log_every) < 1:
-            raise ValueError("network, evaluation, and logging sizes must be positive")
+        if min(self.hidden_layers, self.width, self.log_every) < 1:
+            raise ValueError("network and logging sizes must be positive")
+        if self.evaluation_spatial_resolution < 2 or self.evaluation_time_points < 2:
+            raise ValueError("evaluation spatial resolution and time points must be at least 2")
         if self.learning_rate <= 0 or self.final_learning_rate <= 0:
             raise ValueError("learning rates must be positive")
         if self.lambda_initial < 0 or self.lambda_periodic < 0:

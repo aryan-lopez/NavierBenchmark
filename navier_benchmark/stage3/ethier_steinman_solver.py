@@ -19,7 +19,7 @@ from torch import Tensor
 
 from .ethier_steinman import EthierSteinmanFlow
 from .ethier_steinman_model import EthierSteinmanPINN
-from .unsteady import unsteady_navier_stokes_3d_residual
+from .ethier_steinman_residual import unsteady_navier_stokes_3d_residual
 
 
 @dataclass(frozen=True)
@@ -62,7 +62,7 @@ class EthierSteinmanTrainingConfig:
             raise ValueError("L-BFGS and RAR settings must be nonnegative")
         if self.rar_candidates < 1 or self.rar_chunk_size < 1:
             raise ValueError("RAR candidate and chunk sizes must be positive")
-        if self.evaluation_resolution < 2 or self.evaluation_times < 1:
+        if self.evaluation_resolution < 2 or self.evaluation_times < 2:
             raise ValueError("evaluation grid sizes are invalid")
         if self.causal_time_bins < 1 or not self.causal_epsilon_schedule:
             raise ValueError("causal_time_bins and causal_epsilon_schedule must be nonempty and positive")
@@ -115,7 +115,7 @@ def _losses(model: EthierSteinmanPINN, flow: EthierSteinmanFlow,
             residual_losses.append(bin_momentum + bin_continuity)
         per_time_losses = torch.stack(residual_losses)
         cumulative = torch.cat((per_time_losses.new_zeros(1), torch.cumsum(per_time_losses.detach(), dim=0)[:-1]))
-        causal_weights = torch.exp(-causal_epsilon * (initial.detach() + cumulative))
+        causal_weights = torch.exp(-causal_epsilon * cumulative)
         causal_pde = (causal_weights * per_time_losses).mean()
         total = causal_pde + initial + boundary
     else:

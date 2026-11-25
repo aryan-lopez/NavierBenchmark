@@ -17,7 +17,7 @@ class TaylorGreenPINN(nn.Module):
     """MLP for velocity–pressure or streamfunction–pressure formulations.
 
     ``forward`` always returns physical ``(u, v, p)`` fields so it can be used
-    directly with :func:`unsteady_navier_stokes_residual`. For the
+    directly with ``taylor_green_residual.unsteady_navier_stokes_residual``. For the
     streamfunction formulation, ``raw_outputs`` returns ``(ψ, p)`` and
     ``forward`` derives ``u=ψ_y`` and ``v=-ψ_x`` with automatic differentiation.
 

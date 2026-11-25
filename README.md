@@ -1,68 +1,104 @@
-# Navier–Stokes PINN benchmark
+﻿# Navier–Stokes PINN Benchmark
 
-This repository implements the project proposal through **Stage 1: steady 2D Kovasznay flow**. The code solves cases, `Re=20` and `Re=40`, with a fully connected tanh network that predicts velocity `(u, v)` and kinematic pressure `p`.
+This repository contains a three-stage benchmark study of physics-informed neural networks (PINNs) for incompressible Navier–Stokes flows. It covers steady 2D Kovasznay flow at Reynolds numbers 20 and 40; the unsteady 2D Taylor–Green vortex with formulation, periodicity, and causal-training ablations; and the unsteady 3D Ethier–Steinman (Beltrami) forward problem. Stage 3 inverse viscosity estimation is not yet implemented.
 
-## Stage 1 implementation
+## Repository layout
 
-The Stage 1 runner is `navier_benchmark/stage1.py`; its Kovasznay model and training code are in `navier_benchmark/kovasznay_model.py` and `navier_benchmark/kovasznay_solver.py`. Run it with `python -m navier_benchmark.stage1`; the package shortcut `python -m navier_benchmark` also runs Stage 1.
+| Module | Purpose |
+| --- | --- |
+| `navier_benchmark/stage1/` | Stage 1 package |
+| `navier_benchmark/stage1/cli.py` | Stage 1 command-line runner |
+| `navier_benchmark/stage1/kovasznay.py` | Stage 1 exact solution, domain, and samplers |
+| `navier_benchmark/stage1/kovasznay_model.py` | Stage 1 PINN architecture |
+| `navier_benchmark/stage1/kovasznay_solver.py` | Stage 1 training and evaluation |
+| `navier_benchmark/stage2/` | Stage 2 package |
+| `navier_benchmark/stage2/cli.py` | Stage 2 command-line runner |
+| `navier_benchmark/stage2/taylor_green.py` | Stage 2 exact solution and samplers |
+| `navier_benchmark/stage2/taylor_green_model.py` | Stage 2 PINN formulations and periodic boundary losses |
+| `navier_benchmark/stage2/taylor_green_solver.py` | Stage 2 training and evaluation |
+| `navier_benchmark/stage2/compare.py` | Stage 2 ablation comparison utility |
+| `navier_benchmark/stage3/` | Stage 3 package |
+| `navier_benchmark/stage3/cli.py` | Stage 3 command-line runner |
+| `navier_benchmark/stage3/ethier_steinman.py` | Stage 3 exact solution, domain, and samplers |
+| `navier_benchmark/stage3/ethier_steinman_model.py` | Stage 3 PINN architecture |
+| `navier_benchmark/stage3/ethier_steinman_solver.py` | Stage 3 training and evaluation |
+| `navier_benchmark/stage2/taylor_green_residual.py` | Automatic-differentiation residuals for the Stage 2 2D problem |
+| `navier_benchmark/stage3/ethier_steinman_residual.py` | Automatic-differentiation residuals for the Stage 3 3D problem |
 
-- Domain: `x ∈ [-0.5, 1]`, `y ∈ [-0.5, 1.5]`.
-- The network receives the normalized coordinates plus `sin(2πy)` and `cos(2πy)` features by default, matching the Kovasznay solution's fundamental periodic variation in `y`. Disable these features with `--no-periodic-y-features` for a plain-coordinate comparison.
-- A Coons-patch lifting function extends prescribed exact velocity values from the edges into the interior. The network predicts a correction multiplied by a smooth envelope that vanishes on every edge, so velocity Dirichlet conditions hold exactly without a boundary penalty or sampled boundary points. Exact interior values are not used by the lift.
-- Automatic differentiation evaluates both steady momentum residuals and the continuity residual at interior collocation points.
-- The objective is the sum of momentum and continuity residual MSE; there is no boundary loss because velocity boundary values are enforced exactly.
-- Adam trains with exponential learning-rate decay, followed by fixed-point L-BFGS refinement. RAR is disabled by default; when enabled, it scores 8,192 uniform candidates by momentum-residual magnitude, adds the 256 highest-residual points to the persistent adaptive set, and retains fresh uniform samples in every training batch.
-- Evaluation uses a dense grid independent of the training samples. Relative L2 errors are reported for `u`, `v`, pressure, and the velocity pair. Pressure means are aligned before measuring pressure error because pressure is defined up to an additive constant.
-- Each run saves `model.pt`, `metrics.json`, and `history.csv`.
+## Requirements and installation
 
-## Install and run
+Python 3.10 or newer is recommended. Install the dependencies in a virtual environment:
 
-Python 3.10 or newer is recommended.
-
-```bash
+```powershell
 python -m venv .venv
-source .venv/bin/activate       # Windows PowerShell: .venv\Scripts\Activate.ps1
+.\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
-python -m navier_benchmark
 ```
 
-The default command runs both Reynolds numbers with a 5-layer, 64-wide network, 20,000 Adam steps, and up to 1,500 L-BFGS iterations. Periodic `y` features are enabled and RAR is disabled by default. Results go to `runs/stage1/default/Re_20` and `runs/stage1/default/Re_40`; all Stage 1 variants are grouped under `runs/stage1/`.
+On macOS or Linux, activate the environment with `source .venv/bin/activate` instead.
 
-For a shorter smoke-sized run or a single case:
+All runners accept `--help` to list their options. Use `--device auto`, `--device cpu`, or `--device cuda` to select a device, and `--dtype float32` or `--dtype float64` to select precision. Float64 is the default. Training accuracy depends on the selected configuration and hardware; the reported metrics are measured results, not guarantees.
 
-```bash
-python -m navier_benchmark --reynolds 20 --steps 1000 --lbfgs-steps 50 --output runs/quick
+## Stage 1: steady 2D Kovasznay flow
+
+The Stage 1 runner solves Kovasznay flow on the rectangle `x ∈ [-0.5, 1]`, `y ∈ [-0.5, 1.5]` for Reynolds numbers 20 and 40 by default. The network predicts velocity `(u, v)` and kinematic pressure `p`. Velocity boundary conditions are imposed exactly with a Coons-patch lift and a boundary-vanishing correction. The loss contains the steady momentum and incompressibility residuals.
+
+Default training uses a 5-layer, 64-unit tanh MLP, 20,000 Adam steps with exponential learning-rate decay, followed by up to 1,500 L-BFGS iterations. Periodic `y` input features are enabled. Residual-based adaptive refinement (RAR) is disabled by default.
+
+Run both default Reynolds-number cases:
+
+```powershell
+python -m navier_benchmark.stage1
 ```
 
-Use a positive `--rar-every` value to enable RAR, and adjust `--rar-candidates` and `--rar-points` to change its schedule and size. Use `--device cpu` or `--device cuda` to select compute, `--dtype float32` for faster lower-precision training, and `--help` to see all options. Float64 is the default to support the proposal's `1e-4` accuracy target. Actual accuracy depends on training duration and hardware; the code records measured errors instead of treating the target as guaranteed.
+The package shortcut `python -m navier_benchmark` runs the same command. Results are saved in `runs/stage1/default/Re_20` and `runs/stage1/default/Re_40`. Older Stage 1 variants are grouped under `runs/stage1/` in separate subfolders.
 
+For one case or a shorter run:
 
-## Stage 2: Taylor–Green vortex
+```powershell
+python -m navier_benchmark.stage1 --reynolds 20 --steps 1000 --lbfgs-steps 50 --output runs/stage1/quick
+```
 
-The Taylor–Green case has an exact unsteady solution, space-time collocation, an initial-velocity condition, and periodic boundaries. The Reynolds number and final time are command-line settings because the proposal does not fix them. The single-variant runner supports the velocity–pressure and streamfunction–pressure formulations, soft or hard periodicity, and optional causal weighting over time bins. Together, these choices form eight ablation combinations. The defaults use 1,024 fresh space-time collocation points per Adam step and float64 precision. Keep shared training and evaluation settings aligned across all eight variants for a fair comparison.
+Use `--no-periodic-y-features` to disable the input features. Set `--rar-every` to a positive number to enable RAR; `--rar-candidates` and `--rar-points` control its candidate and retained point counts. Runs save model weights, metrics, and training history.
 
-Run the first requested ablation, velocity–pressure with soft periodicity and no causal weighting:
+## Stage 2: unsteady 2D Taylor–Green vortex
 
-```bash
+Stage 2 solves the Taylor–Green vortex with an exact unsteady solution on `[0, 2π] × [0, 2π] × [0, T]`. It supports velocity–pressure and streamfunction–pressure formulations, soft or hard periodic boundary conditions, and optional causal weighting across time bins. These choices form an eight-variant ablation. Reynolds number and final time are configurable; the defaults are 20 and 1.
+
+Run the velocity–pressure, soft-periodicity, no-causality variant:
+
+```powershell
 python -m navier_benchmark.stage2 --reynolds 20 --final-time 1
 ```
 
-It uses a 5-layer, 64-wide network, 20,000 Adam steps with exponential learning-rate decay, then up to 1,500 L-BFGS iterations. The defaults use 1,024 collocation points per Adam step and float64 precision; RAR is disabled. Periodic sine/cosine features for both x and y are appended to the raw coordinates, and the soft periodic edge loss remains active. The default output is `runs/stage2/velocity_pressure_soft_no_causality/Re_20`. Add `--periodicity hard` for hard periodicity or `--causality` to enable causal time-bin weights. Each run saves its full `config.json`, relative L2 metrics in `metrics.json` (pressure gauge aligned per evaluation frame), `history.csv`, `error_vs_time.csv`, `model.pt`, and Matplotlib plots in PNG for pointwise absolute errors, relative error versus time, and training loss. Adjust `--reynolds`, `--final-time`, `--steps`, `--lbfgs-steps`, evaluation grid options, and `--output` as needed; keep the physical and network settings fixed across ablations for a fair comparison. Matplotlib is listed in `requirements.txt`.
+The default uses a 5-layer, 64-unit network, 20,000 Adam steps, up to 1,500 L-BFGS iterations, 1,024 fresh space-time collocation points per Adam step, and float64 precision. RAR is disabled. Outputs are saved in `runs/stage2/<formulation>_<periodicity>_<causality>/Re_<number>` and include the configuration, model weights, metrics, training history, pointwise error maps, and error-versus-time data and plots.
 
-## Stage 3: 3D Ethier--Steinman (Beltrami) flow
+Choose variants with `--formulation velocity_pressure` or `--formulation streamfunction`, `--periodicity soft` or `--periodicity hard`, and optionally `--causality`. Keep the same physical and training settings when comparing variants.
 
-`navier_benchmark.ethier_steinman.EthierSteinmanFlow` provides the proposal's unsteady 3D exact solution on `[-1, 1]^3 x [0, 1]`, with `a=d=1`. Pass the kinematic viscosity when constructing the case; this is fixed for a forward run and can be made trainable by an inverse-training model. Coordinates are columns `(x, y, z, t)`, and `exact()` returns `(u, v, w, p)`. The case also samples space-time collocation points, initial velocity points at `t=0`, and velocity Dirichlet data on all six spatial faces for `t` in `[0, 1]`. Pressure is available for reference/evaluation and is not imposed on the boundary. `unsteady_navier_stokes_3d_residual()` evaluates the three momentum residuals and incompressibility residual and accepts a scalar tensor viscosity for inverse-training gradients.
+## Stage 3: unsteady 3D Ethier–Steinman (Beltrami) flow
 
-The forward trainer reuses the Stage 1 Adam learning-rate decay and L-BFGS sequence. Defaults are up to 20,000 total Adam steps, 1,500 L-BFGS steps, periodic sine/cosine features of `y`, and no RAR. Initial and six-face velocity boundary data enter as soft losses. Causal time-bin weighting is optional and off by default. Run it with:
+Stage 3 implements the Ethier–Steinman exact solution on `x, y, z ∈ [-1, 1]` and `t ∈ [0, 1]`, with `a = d = 1`.
 
-```bash
+The network predicts `(u, v, w, p)`. Training uses the 3D momentum and incompressibility residuals, the exact initial velocity, and exact velocity data on all six spatial faces as soft loss terms. The viscosity is fixed for a forward run and is configurable with `--viscosity` (default 0.01). Pressure is used for evaluation, not as a boundary condition.
+
+Run the forward benchmark:
+
+```powershell
 python -m navier_benchmark.stage3 --viscosity 0.01
 ```
 
-The default output is `runs/stage3/forward`. It saves model weights, training history, configuration, relative L2 errors for each velocity component and pressure on a dense space-time grid, pointwise absolute-error maps on the central `z=0` slice, and relative error versus time (`error_vs_time.csv` and `.png`). Adjust `--eval-resolution` and `--eval-times` to control evaluation-grid size; set `--plot-time` to choose the map time (defaults to final time). Override defaults with `--no-periodic-y-features` or set `--rar-every` to a positive number to enable RAR. Enable causal weighting with `--causality`; adjust its time bins, epsilon schedule, and minimum-weight threshold with `--causal-time-bins`, `--causal-epsilon-schedule`, and `--causal-weight-threshold`. `--steps` is the total Adam-step budget across all epsilon stages; that budget is split across remaining stages and redistributed when a stage reaches the threshold early.
+Default settings are a 5-layer, 64-unit tanh MLP, up to 20,000 total Adam steps, up to 1,500 L-BFGS iterations, float64 precision, periodic `y` input features, and no RAR. These input features do not impose periodic boundary conditions. Results are written to `runs/stage3/forward` and include model weights, configuration, training history, relative L2 errors, pointwise error maps on the central `z = 0` slice, and error-versus-time data and plots. Pressure errors are reported for completeness; the project’s stated Stage 3 target applies to the velocity components.
 
-To compare threshold-controlled causal weighting against the no-periodic-`y` baseline, give the new run a separate output directory:
+Causal time-bin weighting is optional and disabled by default. Enable it with `--causality`. The epsilon schedule defaults to `0.01 0.1 1 10 100`; stages advance when the minimum causal weight reaches the threshold (default 0.99) or the available step budget for that stage is used. `--steps` is the maximum total Adam-step budget across all stages, not a per-stage count. For example, compare causal weighting against the no-periodic-`y` run with a separate output directory:
 
-```bash
-python -m navier_benchmark.stage3 --no-periodic-y-features --causality --output runs/stage3/forward_no_periodic_y_causal_threshold
+```powershell
+python -m navier_benchmark.stage3 --no-periodic-y-features --causality --steps 20000 --output runs/stage3/forward_no_periodic_y_causal_threshold
 ```
+
+Use `--causal-time-bins`, `--causal-epsilon-schedule`, and `--causal-weight-threshold` to change the causal-training settings. Use `--eval-resolution` and `--eval-times` to control the dense evaluation grid, and `--plot-time` to select the time used for the error maps.
+
+**Scope:** Stage 3 forward training is implemented. The inverse extension that estimates viscosity from noisy interior velocity observations is not yet implemented.
+
+## Output and reproducibility
+
+Each run stores its configuration and metrics alongside the model checkpoint and training history. Use a distinct `--output` directory for each experiment to preserve prior results. Fix the random seed and keep all other settings unchanged when testing one training change at a time.
