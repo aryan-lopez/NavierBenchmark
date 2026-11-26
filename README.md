@@ -51,7 +51,7 @@ Run both default Reynolds-number cases:
 python -m navier_benchmark.stage1
 ```
 
-The package shortcut `python -m navier_benchmark` runs the same command. Results are saved in `runs/stage1/default/Re_20` and `runs/stage1/default/Re_40`. Older Stage 1 variants are grouped under `runs/stage1/` in separate subfolders.
+Results are saved in `runs/stage1/default/Re_20` and `runs/stage1/default/Re_40`. Older Stage 1 variants are grouped under `runs/stage1/` in separate subfolders.
 
 For one case or a shorter run:
 
@@ -60,6 +60,19 @@ python -m navier_benchmark.stage1 --reynolds 20 --steps 1000 --lbfgs-steps 50 --
 ```
 
 Use `--no-periodic-y-features` to disable the input features. Set `--rar-every` to a positive number to enable RAR; `--rar-candidates` and `--rar-points` control its candidate and retained point counts. Runs save model weights, metrics, and training history.
+
+### Observed Stage 1 results
+
+Saved runs show that increasing the L-BFGS budget and enabling periodic-`y` input features improved the combined velocity relative L2 error. The best saved no-RAR run used periodic-`y` features, 20,000 Adam steps, and 1,500 L-BFGS iterations. Errors below are measured on the independent evaluation grid; they are empirical results for the saved runs, not guaranteed performance.
+
+| Saved variant | Combined velocity error, Re=20 | Combined velocity error, Re=40 |
+| --- | ---: | ---: |
+| Initial (500 L-BFGS steps, no periodic-`y`) | `1.650e-3` | `1.736e-3` |
+| 1,500 L-BFGS steps, no periodic-`y` | `1.153e-4` | `1.141e-4` |
+| Periodic-`y`, RAR disabled | `5.949e-5` | `3.734e-5` |
+| Periodic-`y`, 64 RAR points every 5,000 steps | `9.072e-5` | `3.707e-5` |
+
+RAR did not improve both Reynolds-number cases consistently, so it remains disabled by default. Although the combined velocity error in the best saved run is below `1e-4`, its componentwise `v` errors are `2.264e-4` at Re=20 and `2.107e-4` at Re=40. Thus, the saved result meets `1e-4` for combined velocity, but not for each velocity component individually.
 
 ## Stage 2: unsteady 2D Taylor–Green vortex
 
@@ -92,7 +105,7 @@ Default settings are a 5-layer, 64-unit tanh MLP, up to 20,000 total Adam steps,
 Causal time-bin weighting is optional and disabled by default. Enable it with `--causality`. The epsilon schedule defaults to `0.01 0.1 1 10 100`; stages advance when the minimum causal weight reaches the threshold (default 0.99) or the available step budget for that stage is used. `--steps` is the maximum total Adam-step budget across all stages, not a per-stage count. For example, compare causal weighting against the no-periodic-`y` run with a separate output directory:
 
 ```powershell
-python -m navier_benchmark.stage3 --no-periodic-y-features --causality --steps 20000 --output runs/stage3/forward_no_periodic_y_causal_threshold
+python -m navier_benchmark.stage3 --no-periodic-y-features --causality --steps 20000 --output runs/stage3/forward_no_periodic_y_causal_corrected
 ```
 
 Use `--causal-time-bins`, `--causal-epsilon-schedule`, and `--causal-weight-threshold` to change the causal-training settings. Use `--eval-resolution` and `--eval-times` to control the dense evaluation grid, and `--plot-time` to select the time used for the error maps.
